@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "github-chatbot"
+version = "0.1.0"
+description = "A GitHub webhook chatbot with repo bootstrap and Graph RAG support"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "flask>=3.0.0",
+  "mysql-connector-python>=9.0.0",
+  "networkx>=3.2.0",
+  "python-dotenv>=1.0.1",
+  "requests>=2.32.0",
+  "streamlit>=1.37.0",
+  "tqdm>=4.66.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "black>=24.0.0",
+  "pytest>=8.0.0",
+  "ruff>=0.6.0",
+]
+
+[project.scripts]
+github-chatbot = "launcher:main"
+github-chatbot-ui = "launcher:main_ui"
+github-chatbot-webhook = "launcher:main_webhook"
+github-chatbot-bootstrap = "launcher:main_bootstrap"
+
+[tool.setuptools]
+py-modules = [
+  "app_config",
+  "github_chatbot",
+  "github_monitor",
+  "launcher",
+  "kickstart",
+  "nuke_and_rebuild",
+  "test_boot",
+  "test_graph",
+  "webhook_server",
+]
