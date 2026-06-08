@@ -8,6 +8,7 @@ GitHub webhook chatbot with a Streamlit UI, repo bootstrapper, and Graph RAG-sty
 - Shared environment configuration via `.env`
 - A single CLI surface for UI, webhook server, and repo bootstrap
 - Repo-agnostic bootstrap support using `owner/repo`
+- **Currently works only on python projects**
 
 ## Quick Start
 
@@ -56,6 +57,9 @@ Optional values:
 - `WEBHOOK_PORT`
 - `BOOTSTRAP_MAX_COMMITS`
 - `GRAPH_FILE`
+
+## Testing and Maintainence
+- ignore nuke_and_rebuild.py, kickstart.py, test_boot.py, test_graph.py, they are to test bootstrapping and graph generation
 
 ## Deployment notes
 
