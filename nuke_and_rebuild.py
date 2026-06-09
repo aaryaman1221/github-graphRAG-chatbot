@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 
 import mysql.connector
 
@@ -30,12 +31,12 @@ def verify_timestamps():
 
 
 def main() -> int:
-    print("1. Trashing old knowledge graph...")
+    print("1. Deleting old knowledge graph...")
     if os.path.exists(GRAPH_FILE):
         os.remove(GRAPH_FILE)
         print("   Deleted codebase_graph.json")
 
-    print("2. Nuking database tables...")
+    print("2. Removing database tables...")
     conn = get_db()
     cursor = conn.cursor()
     cursor.execute("TRUNCATE TABLE github_events")
@@ -46,8 +47,15 @@ def main() -> int:
     conn.close()
     print("   Database wiped clean.")
 
-    print("3. Starting fresh bootstrap (this will take a minute)...")
-    repo_name = parse_repo_full_name(os.getenv("TARGET_REPO", "aaryaman1221/SecureBank"))
+    print("3. Starting fresh bootstrap (this will take some time)...")
+    
+    # Fetch from environment and validate
+    target_repo = os.getenv("TARGET_REPO")
+    if not target_repo:
+        print("Error: TARGET_REPO environment variable is not set. Please set it before running.", file=sys.stderr)
+        return 1
+        
+    repo_name = parse_repo_full_name(target_repo)
     bootstrap_repo(get_db, repo_name)
 
     print("✅ Rebuild complete!")

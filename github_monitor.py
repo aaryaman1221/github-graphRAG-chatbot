@@ -21,13 +21,19 @@ logger = logging.getLogger(__name__)
 
 GITHUB_API_BASE = "https://api.github.com"
 GRAPH_FILE = get_graph_file()
-BOOTSTRAP_MAX_COMMITS = int(os.getenv("BOOTSTRAP_MAX_COMMITS", 500))
+BOOTSTRAP_MAX_COMMITS = int(os.getenv("BOOTSTRAP_MAX_COMMITS", 1000))
 
 # File extensions to scan for full-file dependency analysis
 SOURCE_EXTENSIONS = {
     ".py", ".js", ".jsx", ".ts", ".tsx", ".go", ".java", ".rs",
     ".rb", ".php", ".c", ".cpp", ".h", ".hpp", ".cs", ".swift",
     ".kt", ".scala", ".r", ".R", ".vue", ".svelte",
+}
+
+# Some source-like files do not have a traditional extension.
+SOURCE_FILENAMES = {
+    "go.mod",
+    "go.work",
 }
 
 # Patterns for identifying entry-point files
@@ -136,6 +142,157 @@ def _is_noise_file(filename):
         
     # 3. Check suffixes
     return name.endswith(IGNORED_SUFFIXES)
+
+
+def _append_dependency(dependencies, filepath, target_module):
+    """Append a dependency edge once per file/module pair."""
+    if not target_module:
+        return
+    edge = (filepath, "DEPENDS_ON", target_module)
+    if edge not in dependencies:
+        dependencies.append(edge)
+
+
+def _go_file_kind(filepath):
+    """Return the Go-related parser kind for a file path, if any."""
+    name = filepath.lower().replace("\\", "/").rsplit("/", 1)[-1]
+    if name == "go.mod":
+        return "go_mod"
+    if name == "go.work":
+        return "go_work"
+    if name.endswith(".go"):
+        return "go_source"
+    return None
+
+
+def _extract_go_dependencies_from_lines(filepath, lines, patch_mode=False):
+    """Extract Go import/require targets from either source text or patch text."""
+    dependencies = []
+    in_import_block = False
+    in_require_block = False
+    in_use_block = False
+    in_replace_block = False
+
+    for raw_line in lines:
+        line = raw_line.rstrip("\n")
+        if patch_mode:
+            if not line or line[0] not in {"+", " "}:
+                continue
+            line = line[1:].lstrip()
+
+        stripped = line.strip()
+        if not stripped or stripped.startswith("//"):
+            continue
+
+        if stripped.startswith("import ("):
+            in_import_block = True
+            continue
+
+        if in_import_block:
+            if stripped.startswith(")"):
+                in_import_block = False
+                continue
+            match = re.search(r'["`]\s*([^"`]+?)\s*["`]', stripped)
+            if match:
+                _append_dependency(dependencies, filepath, match.group(1))
+            continue
+
+        if stripped.startswith("import "):
+            match = re.search(r'["`]\s*([^"`]+?)\s*["`]', stripped)
+            if match:
+                _append_dependency(dependencies, filepath, match.group(1))
+            continue
+
+        if stripped.startswith("require ("):
+            in_require_block = True
+            continue
+
+        if stripped.startswith("use ("):
+            in_use_block = True
+            continue
+
+        if stripped.startswith("replace ("):
+            in_replace_block = True
+            continue
+
+        if in_require_block:
+            if stripped.startswith(")"):
+                in_require_block = False
+                continue
+            parts = stripped.split()
+            if len(parts) >= 2:
+                _append_dependency(dependencies, filepath, parts[0])
+            continue
+
+        if in_use_block:
+            if stripped.startswith(")"):
+                in_use_block = False
+                continue
+            _append_dependency(dependencies, filepath, stripped)
+            continue
+
+        if in_replace_block:
+            if stripped.startswith(")"):
+                in_replace_block = False
+                continue
+            if "=>" in stripped:
+                left, right = [part.strip() for part in stripped.split("=>", 1)]
+                left = left.split()[0] if left else ""
+                right = right.split()[0] if right else ""
+                _append_dependency(dependencies, filepath, left)
+                _append_dependency(dependencies, filepath, right)
+            continue
+
+        if stripped.startswith("require "):
+            parts = stripped.split()
+            if len(parts) >= 3:
+                _append_dependency(dependencies, filepath, parts[1])
+
+        if stripped.startswith("use "):
+            parts = stripped.split(None, 1)
+            if len(parts) == 2:
+                _append_dependency(dependencies, filepath, parts[1].strip())
+
+        if stripped.startswith("replace ") and "=>" in stripped:
+            body = stripped[len("replace "):].strip()
+            left, right = [part.strip() for part in body.split("=>", 1)]
+            left = left.split()[0] if left else ""
+            right = right.split()[0] if right else ""
+            _append_dependency(dependencies, filepath, left)
+            _append_dependency(dependencies, filepath, right)
+
+    return dependencies
+
+
+def _extract_generic_dependencies_from_lines(filepath, lines, patch_mode=False):
+    """Extract imports for non-Go languages from line-oriented text."""
+    dependencies = []
+    patterns = [
+        r"^\s*from\s+([a-zA-Z0-9_./@+-]+)\s+import",
+        r"^\s*import\s+([a-zA-Z0-9_./@+-]+)",
+        r"from\s+['\"]([^'\"]+)['\"]",
+        r"require\(['\"]([^'\"]+)['\"]\)",
+        r"#include\s*[<\"]([^>\"]+)[>\"]",
+        r"use\s+([a-zA-Z0-9_:]+)",
+    ]
+
+    for raw_line in lines:
+        line = raw_line.rstrip("\n")
+        if patch_mode:
+            if not line or line[0] not in {"+", " "}:
+                continue
+            line = line[1:].lstrip()
+
+        stripped = line.strip()
+        if not stripped or (stripped.startswith("#") and not stripped.startswith("#include")):
+            continue
+
+        for pattern in patterns:
+            match = re.search(pattern, stripped)
+            if match:
+                _append_dependency(dependencies, filepath, match.group(1))
+
+    return dependencies
 
 def _truncate(text, limit=5000):
     if not text:
@@ -468,30 +625,25 @@ def update_knowledge_graph(repo_full_name, commit_sha, modified_files, dependenc
 def extract_file_dependencies(compact_files):
     """Scans code diff patches to extract import/require statements."""
     dependencies = []
-    patterns = [
-        r"^\+?\s*from\s+([a-zA-Z0-9_.-]+)\s+import",
-        r"^\+?\s*import\s+([a-zA-Z0-9_.-]+)",
-        r"from\s+['\"]([^'\"]+)['\"]",
-        r"require\(['\"]([^'\"]+)['\"]\)"
-    ]
-    
+
     for item in compact_files:
         source_file = item.get("filename")
         patch = item.get("patch", "")
         if not patch or not source_file:
             continue
-            
-        for line in patch.split('\n'):
-            if not line.startswith('+') and not line.startswith(' '):
-                continue
-                
-            for pattern in patterns:
-                match = re.search(pattern, line)
-                if match:
-                    target_module = match.group(1)
-                    edge = (source_file, "DEPENDS_ON", target_module)
-                    if edge not in dependencies:
-                        dependencies.append(edge)
+
+        kind = _go_file_kind(source_file)
+        lines = patch.split("\n")
+        if kind in {"go_mod", "go_work", "go_source"}:
+            dependencies.extend(
+                dep for dep in _extract_go_dependencies_from_lines(source_file, lines, patch_mode=True)
+                if dep not in dependencies
+            )
+        else:
+            dependencies.extend(
+                dep for dep in _extract_generic_dependencies_from_lines(source_file, lines, patch_mode=True)
+                if dep not in dependencies
+            )
     return dependencies
 
 # ==========================================
@@ -503,7 +655,7 @@ _SHA_RE = re.compile(r'\b[0-9a-f]{7,40}\b', re.IGNORECASE)
 
 _INTENT_PATTERNS = [
     ("blast_radius", re.compile(
-        r"\b(impact|impacted|affect|affected|break|depend|downstream|ripple|what.{0,20}uses|which.{0,20}import|if.{0,20}change)\b",
+        r"\b(blast|radius|impact|impacted|affect|affected|break|depend|downstream|ripple|what.{0,20}uses|which.{0,20}import|if.{0,20}change)\b",
         re.I,
     )),
     ("author_query", re.compile(
@@ -1434,7 +1586,7 @@ def scan_repo_tree(repo_full_name):
                     G.add_edge(parent_node, file_node, relationship="CONTAINS")
 
                 # Collect scannable source files
-                if ext in SOURCE_EXTENSIONS:
+                if ext in SOURCE_EXTENSIONS or path.rsplit("/", 1)[-1].lower() in SOURCE_FILENAMES:
                     source_files.append(path)
 
         _save_graph_locked(G)
@@ -1454,30 +1606,11 @@ def extract_imports_from_source(filepath, source_code):
     Unlike extract_file_dependencies() which only reads diff patches,
     this scans every line to catch pre-existing imports.
     """
-    dependencies = []
-    patterns = [
-        r"^\s*from\s+([a-zA-Z0-9_.-]+)\s+import",
-        r"^\s*import\s+([a-zA-Z0-9_.-]+)",
-        r"from\s+['\"]([^'\"]+)['\"]",
-        r"require\(['\"]([^'\"]+)['\"]\)",
-        r"#include\s*[<\"]([^>\"]+)[>\"]",
-        r"use\s+([a-zA-Z0-9_:]+)",
-    ]
-
-    for line in source_code.split("\n"):
-        stripped = line.strip()
-        # Skip comments and blank lines for speed
-        if not stripped or stripped.startswith("#") and not stripped.startswith("#include"):
-            continue
-
-        for pattern in patterns:
-            match = re.search(pattern, stripped)
-            if match:
-                target_module = match.group(1)
-                edge = (filepath, "DEPENDS_ON", target_module)
-                if edge not in dependencies:
-                    dependencies.append(edge)
-    return dependencies
+    kind = _go_file_kind(filepath)
+    lines = source_code.split("\n")
+    if kind in {"go_mod", "go_work", "go_source"}:
+        return _extract_go_dependencies_from_lines(filepath, lines, patch_mode=False)
+    return _extract_generic_dependencies_from_lines(filepath, lines, patch_mode=False)
 
 
 # Flush accumulated mutations into the graph singleton every N files so that

@@ -8,7 +8,7 @@ GitHub webhook chatbot with a Streamlit UI, repo bootstrapper, and Graph RAG-sty
 - Shared environment configuration via `.env`
 - A single CLI surface for UI, webhook server, and repo bootstrap
 - Repo-agnostic bootstrap support using `owner/repo`
-- **Currently works only on python projects**
+- Supports Python, Go, JavaScript/TypeScript, and several other common codebases
 
 ## Quick Start
 
@@ -49,12 +49,12 @@ Set these values in `.env` or your deployment environment:
 - `DB_NAME`
 - `GITHUB_WEBHOOK_SECRET`
 - `GITHUB_TOKEN`
-
-Optional values:
-
 - `LLM_API_KEY`
 - `LLM_MODEL`
 - `WEBHOOK_PORT`
+
+Optional values:
+
 - `BOOTSTRAP_MAX_COMMITS`
 - `GRAPH_FILE`
 
@@ -72,4 +72,3 @@ Optional values:
 
 - Use proper filenames or function names for best result (ex: Who made changes to webhook server -> Who made changes to webhook_server.py)
 - generation slow due to graph being used for even the smallest query (project emphasis on graph)
-

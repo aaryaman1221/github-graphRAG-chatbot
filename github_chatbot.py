@@ -134,7 +134,7 @@ st.caption("Ask questions about commits and pull requests across your repositori
 st.divider()
 
 with st.sidebar:
-    st.header("⚙️ Settings")
+    st.header("Settings")
 
     if st.session_state.db_ok is None:
         ok, err = try_init_tables()
@@ -168,7 +168,7 @@ with st.sidebar:
         if all_selected:
             selected_repos = []
             for repo in known_repos:
-                st.markdown(f'<span class="repo-pill">📦 {repo}</span>', unsafe_allow_html=True)
+                st.markdown(f'<span class="repo-pill"> {repo}</span>', unsafe_allow_html=True)
         else:
             selected_repos = st.multiselect(
                 "Select repositories",
@@ -183,7 +183,7 @@ with st.sidebar:
     # Bootstrap Status Section
     # -------------------------------------------------------------------
     st.divider()
-    st.subheader("🔧 Bootstrap Status")
+    st.subheader("Bootstrap Status")
 
     if known_repos:
         for repo in known_repos:
@@ -293,9 +293,9 @@ if user_q := st.chat_input("e.g. What files changed in the last commit?"):
                         all_summaries = fetch_recent_summaries(get_db, limit=limit, keyword=sha)
 
                 # ── Path 2: Keyword + intent (file, module, author) ────────────
-                elif search_keyword and intent != "recent":
+                elif search_keyword:  # <-- Removed the restrictive intent check
                     targeted_commits = get_commits_from_graph(
-                        search_keyword, max_hops=2, intent=intent
+                    search_keyword, max_hops=2, intent=intent
                     )
                     if targeted_commits:
                         all_summaries = fetch_summaries_by_commits(get_db, targeted_commits)
